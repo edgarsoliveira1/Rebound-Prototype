@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>One Shot, One Room - Hotline Style Prototype</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #0a0a0a; /* Darker background */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            color: white;
+        }
+        #gameContainer {
+            position: relative;
+            box-shadow: 0 0 30px rgba(0, 255, 204, 0.2);
+        }
+        canvas {
+            background-color: #1a1a1a; /* Slightly lighter floor */
+            border: 4px solid #333;
+            display: block;
+            /* Crosshair cursor */
+            cursor: crosshair; 
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            pointer-events: none;
+            text-shadow: 1px 1px 2px black;
+        }
+        #gameOverScreen {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            z-index: 10;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 20px;
+            background: #ff0055; /* More aggressive Hotline-style color */
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-family: inherit;
+            margin-top: 20px;
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+        button:hover { background: #fff; color: #ff0055; }
+    </style>
+</head>
+<body>
+
+<div id="gameContainer">
+    <canvas id="gameCanvas" width="800" height="800"></canvas>
+    <div id="ui">
+        <h1 style="color: #ff0055">SCORE: <span id="scoreVal" style="color:white">0</span></h1>
+        <p style="font-size: 14px; opacity: 0.8">WASD: Move | CLICK: Shoot | Use walls to hide.</p>
+    </div>
+    <div id="gameOverScreen">
+        <h1 style="color: #ff0055; font-size: 50px;">YOU DIED</h1>
+        <p>Final Score: <span id="finalScore">0</span></p>
+        <button onclick="resetGame()">RESTART</button>
+    </div>
+</div>
+
+<script>
+    // --- SETUP AND MAP ---
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('scoreVal');
+    const gameOverScreen = document.getElementById('gameOverScreen');
+    const finalScoreEl = document.getElementById('finalScore');
+
+    let gameRunning = true;
+    let score = 0;
+    let frameCount = 0;
+
+    const TILE_SIZE = 40;
+    const COLS = canvas.width / TILE_SIZE; // 20
+    const ROWS = canvas.height / TILE_SIZE; // 20
+
+    // 1 = Wall, 0 = Floor. "Hotline" style design: connected rooms and corridors.
+    const mapGrid = [
+        [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+        [1,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,1],
+        [1,0,1,1,1,0,1,0,1,1,1,1,1,0,1,0,1,1,0,1],
+        [1,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,1,0,0,1],
+        [1,0,1,0,1,1,1,1,1,0,1,0,1,1,1,0,1,0,1,1],
+        [1,0,0,0,1,0,0,0,1,0,1,0,0,0,0,0,1,0,0,1],
+        [1,1,1,0,1,0,1,0,1,0,1,1,1,1,1,1,1,1,0,1],
+        [1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1],
+        [1,0,1,1,1,1,1,1,0,0,0,1,1,1,1,0,1,1,1,1],
+        [1,0,0,0,0,0,0,0,1,0,1,0,0,0,0,0,0,0,0,1],
+        [1,1,1,1,1,0,1,0,1,0,1,0,1,1,1,1,1,1,0,1],
+        [1,0,0,0,1,0,1,0,0,0,0,0,1,0,0,0,1,0,0,1],
+        [1,0,1,0,1,1,1,0,1,1,1,0,1,0,1,0,1,0,1,1],
+        [1,0,1,0,0,0,0,0,1,0,0,0,1,0,1,0,0,0,0,1],
+        [1,0,1,1,1,1,1,0,1,0,1,1,1,0,1,1,1,1,0,1],
+        [1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0,1],
+        [1,1,1,1,1,0,1,1,1,1,1,0,1,1,1,1,1,0,1,1],
+        [1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,1],
+        [1,0,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,1,0,1],
+        [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+    ];
+
+    // Helper function: Gets the tile type at an X,Y coordinate (in pixels)
+    function getTileAt(x, y) {
+        const col = Math.floor(x / TILE_SIZE);
+        const row = Math.floor(y / TILE_SIZE);
+        if (col < 0 || col >= COLS || row < 0 || row >= ROWS) return 1; // Outside the map is a wall
+        return mapGrid[row][col];
+    }
+
+    // --- INPUTS ---
+    const keys = { w: false, a: false, s: false, d: false };
+    const mouse = { x: 0, y: 0 };
+
+    window.addEventListener('keydown', e => {
+        if(e.key.toLowerCase() === 'w' || e.key === 'ArrowUp') keys.w = true;
+        if(e.key.toLowerCase() === 'a' || e.key === 'ArrowLeft') keys.a = true;
+        if(e.key.toLowerCase() === 's' || e.key === 'ArrowDown') keys.s = true;
+        if(e.key.toLowerCase() === 'd' || e.key === 'ArrowRight') keys.d = true;
+    });
+
+    window.addEventListener('keyup', e => {
+        if(e.key.toLowerCase() === 'w' || e.key === 'ArrowUp') keys.w = false;
+        if(e.key.toLowerCase() === 'a' || e.key === 'ArrowLeft') keys.a = false;
+        if(e.key.toLowerCase() === 's' || e.key === 'ArrowDown') keys.s = false;
+        if(e.key.toLowerCase() === 'd' || e.key === 'ArrowRight') keys.d = false;
+    });
+
+    canvas.addEventListener('mousemove', e => {
+        const rect = canvas.getBoundingClientRect();
+        mouse.x = e.clientX - rect.left;
+        mouse.y = e.clientY - rect.top;
+    });
+
+    canvas.addEventListener('mousedown', () => {
+        if (gameRunning && ball.state === 'READY') {
+            shootBall();
+        }
+    });
+
+    // --- GAME OBJECTS ---
+    // Spawns the player in the center of the map (in an empty area)
+    const player = {
+        x: TILE_SIZE * 10, y: TILE_SIZE * 8, 
+        size: 18, speed: 4, color: '#00ffcc'
+    };
+
+    const ball = {
+        x: -100, y: -100, radius: 6, 
+        vx: 0, vy: 0, 
+        speed: 14, // Faster for cool ricochets
+        friction: 0.99, 
+        state: 'READY', 
+        color: '#ffffff'
+    };
+
+    let enemies = [];
+    let particles = [];
+
+    // --- LINE OF SIGHT SYSTEM ---
+    // Checks if there is a wall between two points (Simple Raycasting)
+    function checkLOS(x1, y1, x2, y2) {
+        const dx = Math.abs(x2 - x1);
+        const dy = Math.abs(y2 - y1);
+        const sx = (x1 < x2) ? 1 : -1;
+        const sy = (y1 < y2) ? 1 : -1;
+        let err = dx - dy;
+
+        let cx = x1;
+        let cy = y1;
+
+        // Check the starting point
+        if (getTileAt(cx, cy) === 1) return false;
+
+        // Bresenham's line algorithm to check tiles along the path
+        while (!((Math.abs(cx - x2) < 1) && (Math.abs(cy - y2) < 1))) {
+            let e2 = 2 * err;
+            if (e2 > -dy) { err -= dy; cx += sx; }
+            if (e2 < dx) { err += dx; cy += sy; }
+            
+            // Checks if the current point on the line touches a wall (with a small margin of error)
+            if (getTileAt(cx, cy) === 1) return false; // View blocked
+            
+             // Check a bit around to avoid "seeing through thin corners"
+            if (getTileAt(cx + TILE_SIZE/4, cy + TILE_SIZE/4) === 1 && 
+                getTileAt(cx - TILE_SIZE/4, cy - TILE_SIZE/4) === 1) return false;
+        }
+        return true; // Clear view
+    }
+
+    // --- MAIN LOGIC ---
+
+    function spawnEnemy() {
+        if (enemies.length >= 10 + score/50) return; // Limit of enemies on screen
+
+        let ex, ey, tileType;
+        // Tries to find an empty place to spawn
+        do {
+            ex = Math.random() * canvas.width;
+            ey = Math.random() * canvas.height;
+            tileType = getTileAt(ex, ey);
+            // Doesn't spawn inside a wall, nor too close to the player
+        } while (tileType === 1 || Math.hypot(player.x - ex, player.y - ey) < 200);
+
+        enemies.push({
+            x: ex, y: ey, 
+            size: 18, 
+            baseSpeed: 1.2 + (Math.random() * 0.5) + (score * 0.005),
+            speed: 0, // Starts stationary
+            state: 'PATROL', // PATROL or CHASE
+            color: '#ff0055',
+            hasLOS: false // Visual debug
+        });
+    }
+
+    function shootBall() {
+        const angle = Math.atan2(mouse.y - player.y, mouse.x - player.x);
+        ball.state = 'FIRED';
+        ball.x = player.x;
+        ball.y = player.y;
+        ball.vx = Math.cos(angle) * ball.speed;
+        ball.vy = Math.sin(angle) * ball.speed;
+    }
+
+    function createExplosion(x, y, color) {
+        for(let i=0; i<12; i++) {
+            particles.push({
+                x: x, y: y,
+                vx: (Math.random() - 0.5) * 15,
+                vy: (Math.random() - 0.5) * 15,
+                life: 1.0,
+                color: color
+            });
+        }
+    }
+
+    function update() {
+        if (!gameRunning) return;
+        frameCount++;
+
+        // --- 1. Move Player with Wall Collision ---
+        let nextX = player.x;
+        let nextY = player.y;
+
+        if (keys.w) nextY -= player.speed;
+        if (keys.s) nextY += player.speed;
+        if (keys.a) nextX -= player.speed;
+        if (keys.d) nextX += player.speed;
+
+        // Check collision on the X axis (checks the player's corners)
+        if (getTileAt(nextX - player.size/2 + 2, player.y - player.size/2 + 2) === 0 &&
+            getTileAt(nextX + player.size/2 - 2, player.y - player.size/2 + 2) === 0 &&
+            getTileAt(nextX - player.size/2 + 2, player.y + player.size/2 - 2) === 0 &&
+            getTileAt(nextX + player.size/2 - 2, player.y + player.size/2 - 2) === 0) {
+            player.x = nextX;
+        }
+
+        // Check collision on the Y axis
+        if (getTileAt(player.x - player.size/2 + 2, nextY - player.size/2 + 2) === 0 &&
+            getTileAt(player.x + player.size/2 - 2, nextY - player.size/2 + 2) === 0 &&
+            getTileAt(player.x - player.size/2 + 2, nextY + player.size/2 - 2) === 0 &&
+            getTileAt(player.x + player.size/2 - 2, nextY + player.size/2 - 2) === 0) {
+            player.y = nextY;
+        }
+
+        // --- 2. Move Ball with Precise Wall Ricochet ---
+        if (ball.state === 'READY') {
+            ball.x = player.x; ball.y = player.y;
+        } else {
+            // Move X and check collision
+            ball.x += ball.vx;
+             // Checks the 4 cardinal points of the ball for collision
+            if (getTileAt(ball.x + ball.radius, ball.y) === 1 || getTileAt(ball.x - ball.radius, ball.y) === 1) {
+                ball.x -= ball.vx; // Undo the movement
+                ball.vx = -ball.vx * 0.9; // Inverts and loses some energy
+            }
+
+            // Move Y and check collision
+            ball.y += ball.vy;
+            if (getTileAt(ball.x, ball.y + ball.radius) === 1 || getTileAt(ball.x, ball.y - ball.radius) === 1) {
+                ball.y -= ball.vy; // Undo the movement
+                ball.vy = -ball.vy * 0.9; // Inverts and loses energy
+            }
+
+            ball.vx *= ball.friction;
+            ball.vy *= ball.friction;
+
+            if (Math.abs(ball.vx) < 0.8 && Math.abs(ball.vy) < 0.8) {
+                ball.state = 'STUCK';
+                ball.vx = 0; ball.vy = 0;
+            }
+
+            const dist = Math.hypot(player.x - ball.x, player.y - ball.y);
+            if (dist < player.size + ball.radius && ball.state !== 'FIRED') {
+                if (Math.hypot(ball.vx, ball.vy) < 5) ball.state = 'READY';
+            }
+        }
+
+        // --- 3. Enemies with Line of Sight (LOS) AI ---
+        if (frameCount % 60 === 0) spawnEnemy();
+
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            let e = enemies[i];
+            
+            // Check Field of View
+            e.hasLOS = checkLOS(e.x, e.y, player.x, player.y);
+
+            if (e.hasLOS) {
+                e.state = 'CHASE';
+                e.speed = e.baseSpeed;
+            } else {
+                // If sight is lost, stops ("Hotline Miami" style - ambush)
+                e.state = 'PATROL';
+                e.speed *= 0.9; // Decelerates to a stop
+            }
+            
+            // Movement if chasing
+            if (e.speed > 0.1) {
+                const angle = Math.atan2(player.y - e.y, player.x - e.x);
+                let nextEX = e.x + Math.cos(angle) * e.speed;
+                let nextEY = e.y + Math.sin(angle) * e.speed;
+
+                // Enemy vs Wall Collision (Simple)
+                if(getTileAt(nextEX, e.y) === 0) e.x = nextEX;
+                if(getTileAt(e.x, nextEY) === 0) e.y = nextEY;
+            }
+
+            // Game Over Collision
+            if (Math.hypot(player.x - e.x, player.y - e.y) < player.size/2 + e.size/2) {
+                gameOver();
+            }
+
+            // Enemy vs Ball Collision
+            if (Math.hypot(ball.x - e.x, ball.y - e.y) < ball.radius + e.size/2 && ball.state !== 'READY') {
+                if (Math.hypot(ball.vx, ball.vy) > 2) {
+                    createExplosion(e.x, e.y, '#ff0055');
+                    enemies.splice(i, 1);
+                    score += 50;
+                    scoreEl.innerText = score;
+                }
+            }
+        }
+
+        // 4. Particles
+        for (let i = particles.length - 1; i >= 0; i--) {
+            let p = particles[i];
+            p.x += p.vx; p.y += p.vy; p.life -= 0.05;
+            if (p.life <= 0) particles.splice(i, 1);
+        }
+    }
+
+    function draw() {
+        // Draw the Map (Walls and Floor)
+        for (let row = 0; row < ROWS; row++) {
+            for (let col = 0; col < COLS; col++) {
+                if (mapGrid[row][col] === 1) {
+                    // Wall
+                    ctx.fillStyle = '#333'; // Dark gray
+                    ctx.fillRect(col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                     // Border for definition
+                    ctx.strokeStyle = '#444'; 
+                    ctx.strokeRect(col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                } else {
+                    // Floor
+                    ctx.fillStyle = '#1a1a1a'; 
+                    ctx.fillRect(col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                }
+            }
+        }
+
+        // Ball trail (before the ball so it's underneath)
+         if(ball.state === 'FIRED' || Math.hypot(ball.vx, ball.vy) > 1) {
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+            ctx.lineWidth = ball.radius*2;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(ball.x, ball.y);
+            // Draws a trail based on the opposite velocity
+            ctx.lineTo(ball.x - ball.vx*4, ball.y - ball.vy*4);
+            ctx.stroke();
+        }
+
+        // Player
+        ctx.fillStyle = player.color;
+        ctx.fillRect(player.x - player.size/2, player.y - player.size/2, player.size, player.size);
+
+        // Aiming line
+        if (ball.state === 'READY') {
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(0, 255, 204, 0.3)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([5, 5]); // Dotted line
+            ctx.moveTo(player.x, player.y);
+            ctx.lineTo(mouse.x, mouse.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        // Ball
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+        ctx.fillStyle = ball.state === 'STUCK' ? '#ffea00' : ball.color;
+        ctx.fill();
+       
+
+        // Enemies
+        enemies.forEach(e => {
+            // Changes color if chasing (Visual LOS Debug)
+            ctx.fillStyle = e.hasLOS ? '#ff0055' : '#770022'; // Bright red if it sees, dark red if not
+            
+            // Draws a triangle pointing towards the player
+            const angle = Math.atan2(player.y - e.y, player.x - e.x);
+            ctx.save();
+            ctx.translate(e.x, e.y);
+            ctx.rotate(angle);
+            ctx.beginPath();
+            ctx.moveTo(e.size/1.5, 0);
+            ctx.lineTo(-e.size/1.5, -e.size/1.5);
+            ctx.lineTo(-e.size/1.5, e.size/1.5);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+        });
+
+        // Particles
+        particles.forEach(p => {
+            ctx.fillStyle = p.color;
+            ctx.globalAlpha = p.life;
+            ctx.fillRect(p.x, p.y, 5, 5);
+            ctx.globalAlpha = 1.0;
+        });
+        
+        requestAnimationFrame(() => { update(); draw(); });
+    }
+
+    function gameOver() {
+        gameRunning = false;
+        finalScoreEl.innerText = score;
+        gameOverScreen.style.display = 'flex';
+    }
+
+    function resetGame() {
+        gameRunning = true;
+        score = 0; scoreEl.innerText = '0';
+        enemies = []; particles = [];
+        player.x = TILE_SIZE * 10; player.y = TILE_SIZE * 8; // Respawn in the safe center
+        ball.state = 'READY'; ball.vx = 0; ball.vy = 0; ball.x = -100;
+        gameOverScreen.style.display = 'none';
+        update();
+    }
+
+    draw();
+
+</script>
+</body>
+</html>
